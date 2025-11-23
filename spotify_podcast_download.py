@@ -47,8 +47,13 @@ def get_spotify_metadata(url):
 
 def download_video(url, title):
     print(f"Downloading: {title}")
+    # Sanitize title for filename
+    safe_title = re.sub(r'[<>:"/\\|?*]', '', title)
+    safe_title = safe_title.strip()
+    
     ydl_opts = {
         'format': 'bestaudio/best',
+        'outtmpl': f'{safe_title}.%(ext)s',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
@@ -74,7 +79,9 @@ def calculate_score(candidate, metadata):
     # 1. Duration Check
     target_duration = metadata.get('duration')
     video_duration = candidate.get('duration')
-    if target_duration and video_duration:
+    duration_available = target_duration and video_duration
+    
+    if duration_available:
         diff = abs(target_duration - video_duration)
         if diff < 60:
             score += 50
@@ -99,9 +106,19 @@ def calculate_score(candidate, metadata):
     
     common = unique_show_words.intersection(uploader_words)
     
+    channel_match = False
     if len(common) >= 1:
         score += 40
         reasons.append(f"Channel match ({common})")
+        channel_match = True
+    else:
+        # Check for common abbreviations (e.g., JRE for Joe Rogan Experience)
+        # Extract initials from show name
+        show_initials = ''.join([word[0] for word in show_name.split() if word not in stop_words])
+        if show_initials and show_initials in uploader + channel:
+            score += 35
+            reasons.append(f"Channel abbreviation match ({show_initials})")
+            channel_match = True
         
     # 3. Title Similarity
     target_title = metadata.get('title', '').lower()
@@ -111,13 +128,20 @@ def calculate_score(candidate, metadata):
     ratio = difflib.SequenceMatcher(None, target_title, video_title).ratio()
     
     # Check against title without episode number (if applicable)
-    clean_target = re.sub(r'^\d+[:\s-]', '', target_title).strip()
+    clean_target = re.sub(r'^#?\d+[:\s-]', '', target_title).strip()
     if clean_target != target_title:
         ratio2 = difflib.SequenceMatcher(None, clean_target, video_title).ratio()
         ratio = max(ratio, ratio2)
-        
-    score += ratio * 30
+    
+    # Give more weight to title similarity if duration is not available
+    title_weight = 50 if not duration_available else 30
+    score += ratio * title_weight
     reasons.append(f"Title similarity {ratio:.2f}")
+    
+    # Bonus: If title similarity is very high (>0.8) and channel matches, boost score
+    if ratio > 0.8 and channel_match:
+        score += 10
+        reasons.append("High confidence match")
     
     return score, reasons
 
@@ -184,6 +208,121 @@ def try_direct_sources(metadata):
                     continue
     
     return False
+
+def search_apple_podcasts(metadata):
+    """Search Apple Podcasts using iTunes Search API"""
+    print("\n🍎 Searching Apple Podcasts...")
+    
+    show = metadata.get('show', '')
+    title = metadata.get('title', '')
+    
+    # Extract episode number
+    episode_num = None
+    match = re.match(r'^(\d+)', title)
+    if match:
+        episode_num = match.group(1)
+    
+    try:
+        # First, search for the podcast show
+        search_url = "https://itunes.apple.com/search"
+        params = {
+            'term': show,
+            'media': 'podcast',
+            'entity': 'podcast',
+            'limit': 5
+        }
+        
+        print(f"Searching for podcast: {show}")
+        response = requests.get(search_url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        
+        if not data.get('results'):
+            print("No podcast found on Apple Podcasts")
+            return False
+        
+        # Get the podcast ID (collectionId)
+        podcast_id = data['results'][0]['collectionId']
+        podcast_name = data['results'][0]['collectionName']
+        print(f"Found podcast: {podcast_name} (ID: {podcast_id})")
+        
+        # Now search for episodes in this podcast
+        lookup_url = "https://itunes.apple.com/lookup"
+        params = {
+            'id': podcast_id,
+            'entity': 'podcastEpisode',
+            'limit': 200  # Get recent episodes
+        }
+        
+        print(f"Fetching episodes...")
+        response = requests.get(lookup_url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        
+        if not data.get('results') or len(data['results']) < 2:
+            print("No episodes found")
+            return False
+        
+        # First result is the podcast itself, rest are episodes
+        episodes = data['results'][1:]
+        print(f"Found {len(episodes)} episodes")
+        
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+        }
+        
+        best_candidate = None
+        best_score = 0
+        
+        # Score each episode
+        for episode in episodes:
+            episode_title = episode.get('trackName', '')
+            episode_url = episode.get('episodeUrl', '')
+            episode_duration = episode.get('trackTimeMillis', 0) // 1000  # Convert to seconds
+            
+            # Create a candidate dict similar to yt-dlp format
+            candidate = {
+                'title': episode_title,
+                'duration': episode_duration,
+                'uploader': podcast_name,
+                'channel': podcast_name,
+                'url': episode_url
+            }
+            
+            score, reasons = calculate_score(candidate, metadata)
+            
+            if score > best_score:
+                best_score = score
+                best_candidate = episode
+                print(f"New best: {episode_title} | Score: {score:.2f} | Reasons: {reasons}")
+        
+        # If we found a good match, try to download it
+        if best_candidate and best_score >= 40:
+            episode_url = best_candidate.get('episodeUrl', '')
+            episode_title = best_candidate.get('trackName', '')
+            
+            print(f"\n✅ Selected: {episode_title} (Score: {best_score:.2f})")
+            print(f"Apple Podcasts URL: {episode_url}")
+            
+            # Try to download using yt-dlp
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                try:
+                    info = ydl.extract_info(episode_url, download=False)
+                    return download_video(episode_url, episode_title)
+                except Exception as e:
+                    print(f"⚠️  yt-dlp cannot download from Apple Podcasts directly: {e}")
+                    print(f"However, you can manually download from: {episode_url}")
+                    return False
+        else:
+            print(f"No suitable match found on Apple Podcasts. Best score was {best_score:.2f}")
+            return False
+            
+    except Exception as e:
+        print(f"Error searching Apple Podcasts: {e}")
+        return False
 
 def search_web_and_download(metadata):
     print("\nSearching web for alternative sources...")
@@ -368,6 +507,10 @@ def main():
     if not success:
         # Try direct URL construction
         success = try_direct_sources(metadata)
+    
+    if not success:
+        # Try Apple Podcasts
+        success = search_apple_podcasts(metadata)
         
     if not success:
         # Fallback to web search
@@ -376,6 +519,7 @@ def main():
     if not success:
         print("Failed to download podcast from all sources.")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

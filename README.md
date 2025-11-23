@@ -7,7 +7,8 @@ A Python script that downloads podcast episodes from Spotify URLs by finding the
 - **Multi-Source Fallback System**: Tries multiple sources to find your podcast
   - YouTube search (primary)
   - Direct Acast URL construction
-  - Web search for alternative platforms (Acast, Podchaser, Apple Podcasts, SoundCloud)
+  - Apple Podcasts search (via iTunes API)
+  - Web search for alternative platforms (Acast, Podchaser, SoundCloud)
   
 - **Smart Validation**: Uses a scoring system to ensure the correct episode is downloaded
   - Duration matching (exact or approximate)
@@ -61,19 +62,24 @@ python spotify_podcast_download.py "https://open.spotify.com/episode/1InTLPWB1UC
 3. **Direct URL Construction**: Attempts to construct direct URLs to known platforms:
    - Acast (with multiple slug variations)
 
-4. **Web Search Fallback**: If YouTube and direct URLs fail, searches the web for:
+4. **Apple Podcasts Search**: Searches Apple Podcasts using the iTunes API:
+   - Finds the podcast show by name
+   - Retrieves recent episodes (up to 200)
+   - Scores each episode based on title, duration, and show match
+   - Downloads the best match if score ≥40
+
+5. **Web Search Fallback**: If YouTube, direct URLs, and Apple Podcasts fail, searches the web for:
    - Acast episodes
    - Podchaser episodes
-   - Apple Podcasts
    - SoundCloud
 
-5. **Validation**: Each candidate is scored based on:
+6. **Validation**: Each candidate is scored based on:
    - **Duration match** (50 points for exact, 20 for approximate)
    - **Channel match** (40 points if uploader matches show name)
    - **Title similarity** (up to 30 points)
    - Minimum score threshold: 50 for YouTube, 40 for alternative sources
 
-6. **Download**: Downloads the best match and converts to MP3
+7. **Download**: Downloads the best match and converts to MP3
 
 ## Scoring System
 
@@ -102,6 +108,7 @@ The script validates each candidate to prevent downloading the wrong episode:
 - ✅ YouTube
 - ✅ Acast
 - ✅ Podchaser
+- ✅ Apple Podcasts (via iTunes API)
 - ✅ SoundCloud
 - ❌ Amazon Music (DRM-protected)
 - ❌ Spotify (no direct download)
