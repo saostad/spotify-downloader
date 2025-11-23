@@ -75,22 +75,30 @@ python spotify_podcast_download.py "https://open.spotify.com/episode/1InTLPWB1UC
 
 6. **Validation**: Each candidate is scored based on:
    - **Duration match** (50 points for exact, 20 for approximate)
-   - **Channel match** (40 points if uploader matches show name)
-   - **Title similarity** (up to 30 points)
+   - **Channel match** (40 points if uploader matches show name, 35 for abbreviations)
+   - **Title similarity** (30-50 points, weighted higher when duration unavailable)
+   - **High confidence bonus** (10 points for >80% title match + channel match)
    - Minimum score threshold: 50 for YouTube, 40 for alternative sources
 
 7. **Download**: Downloads the best match and converts to MP3
 
 ## Scoring System
 
-The script validates each candidate to prevent downloading the wrong episode:
+The script uses an intelligent scoring system to prevent downloading the wrong episode:
 
 | Criteria | Points | Description |
 |----------|--------|-------------|
 | Exact duration match | 50 | Within 60 seconds |
 | Approximate duration | 20 | Within 3 minutes |
-| Channel match | 40 | Uploader name matches show |
-| Title similarity | 0-30 | Based on fuzzy matching |
+| Channel match | 40 | Uploader name matches show name |
+| Channel abbreviation | 35 | Abbreviated channel (e.g., "JRE" for "Joe Rogan Experience") |
+| Title similarity | 0-50 | 50 points max when duration unavailable, 30 when available |
+| High confidence bonus | 10 | Title similarity >80% + channel match |
+
+**Smart Features**:
+- Detects abbreviated channel names (e.g., PowerfulJRE → Joe Rogan Experience)
+- Increases title weight when Spotify duration metadata is missing
+- Handles episode numbers with or without `#` prefix
 
 **Threshold**: 
 - YouTube results: ≥50 points required
@@ -118,7 +126,13 @@ The script validates each candidate to prevent downloading the wrong episode:
 
 Downloaded files are saved in the current directory with the format:
 ```
-Episode Title [video_id].mp3
+Episode Title.mp3
+```
+
+For example:
+```
+Joe Rogan Experience #2416 - Dan Farah.mp3
+Parsing the Peace Deal, MAGA Star Quits, Obesity Pills, (Bonus!) Books We Love.mp3
 ```
 
 ## Troubleshooting
